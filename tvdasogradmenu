@@ -1,0 +1,6 @@
+#!/bin/bash
+
+channel_string="$(tvdasogra -l | tac | dmenu -i)"
+channel_number="$(echo $channel_string | awk -F':' '{print $1}')"
+
+tvdasogra --channel $channel_number

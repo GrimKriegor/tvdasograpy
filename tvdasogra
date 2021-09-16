@@ -1,0 +1,206 @@
+#!/usr/bin/python
+
+import argparse
+import configparser
+import json
+import os
+import re
+import requests
+
+CONFIG_FILE_PATH = "~/.config/tvdasogra.ini"
+LISTS_FILE_PATH = "~/.cache/tvdasogra.json"
+
+SAMPLE_CONFIG = """
+[servers]
+query =
+central =
+list =
+url =
+
+[app]
+video_player = mpv
+timeout = 5
+
+[credentials]
+username =
+password =
+"""
+
+def load_config():
+    with open(os.path.expanduser(CONFIG_FILE_PATH), 'r') as _configfile:
+        config.read_file(_configfile)
+
+def save_config():
+    with open(os.path.expanduser(CONFIG_FILE_PATH), 'w') as _configfile:
+        config.write(_configfile)
+
+def load_lists():
+    try:
+        with open(os.path.expanduser(LISTS_FILE_PATH), 'r') as _listsfile:
+            return json.load(_listsfile)
+    except FileNotFoundError:
+        raise FileNotFoundError
+
+def save_lists(_lists):
+    with open(os.path.expanduser(LISTS_FILE_PATH), 'w') as _listsfile:
+        json.dump(_lists, _listsfile)
+
+def get_central_server():
+    _url = "http://%s/?/Android" % config["servers"]["query"]
+    _headers = {
+        "User-Agent":"IPTV Smarters Pro",
+        "Content-Type":"application/x-www-form-urlencoded",
+        "Content-Length":"179",
+        "Host":config["servers"]["query"],
+        "Connection":"Keep-Alive",
+        "Accept-Encoding":"gzip"
+    }
+    _data = {
+        "m":"gu",
+        "k":"Kd573c44690fe4ae4977095298b827b28",
+        "sc":"fb43b5a656ceaa32542c474b87cd6ea3",
+        "u":"",
+        "pw":"no_password",
+        "r":"6975015",
+        "av":"2.1.1",
+        "dt":"unknown",
+        "d":"Unknown Android SDK built for x86",
+        "do":"9 P"
+    }
+    try:
+        _response = requests.post(_url, headers=_headers, data=_data, timeout=float(config["app"]["timeout"]))
+        _central_server = _response.json()['su']
+        _central_server_trunc = re.sub(r'^.*://', '', _central_server)
+        return _central_server_trunc
+    except Exception as err:
+        print(err)
+
+def get_listings_server():
+    _central_server = config["servers"]["central"]
+    _url = "http://%s/player_api.php" % _central_server
+    _headers = {
+        "Content-Type":"application/x-www-form-urlencoded",
+        "Content-Length":"34",
+        "Host":_central_server,
+        "Connection":"Keep-Alive",
+        "Accept-Encoding":"gzip",
+        "User-Agent":"okhttp/3.8.0"
+    }
+    _data = {
+        "username":config["credentials"]["username"],
+        "password":config["credentials"]["password"],
+    }
+    try:
+        _response = requests.post(_url, headers=_headers, data=_data, timeout=float(config["app"]["timeout"]))
+        return _response.json()['server_info']['url'] + ":" + _response.json()['server_info']['port']
+    except Exception as err:
+        print(err)
+
+def get_url_server():
+    return config["servers"]["list"]
+
+def get_stream_list(_stream_type):
+    _url = "http://%s/player_api.php" % config["servers"]["list"]
+    _headers = {
+        "Content-Type":"application/x-www-form-urlencoded",
+        "Content-Length":"58",
+        "Host":config["servers"]["list"],
+        "Connection":"Keep-Alive",
+        "Accept-Encoding":"gzip",
+        "User-Agent":"okhttp/3.8.0"
+    }
+    _data = {
+        "username":config["credentials"]["username"],
+        "password":config["credentials"]["password"],
+        "action":"get_" + _stream_type
+    }
+    try:
+        _response = requests.post(_url, headers=_headers, data=_data, timeout=float(config["app"]["timeout"]))
+        return _response.json()
+    except Exception as err:
+        print(err)
+
+def print_stream_list(_stream_list):
+    for stream in reversed(_stream_list):
+        _num = str(stream['num'])
+        _name = str(stream['name'])
+        _stream_id = str(stream['stream_id'])
+        print("%s: %s" % (_num, _name))
+
+def get_stream_url(_stream_id):
+    _url = "http://%s/%s/%s/%s" % (config["servers"]["url"], config["credentials"]["username"], config["credentials"]["password"], _stream_id)
+    _headers = {
+        "Connection":"close",
+        "User-Agent":"FIBRAPlayer",
+        "Accept":"*/*",
+        "Accept-Encoding":"gzip",
+        "Range":"bytes=0-",
+        "Host":config["servers"]["url"],
+        "Icy-MetaData":"1"
+    }
+    try:
+        _response = requests.get(_url, headers=_headers, timeout=float(config["app"]["timeout"]), stream=True, allow_redirects=False)
+    except Exception as err:
+        print(err)
+    return _response.headers['Location']
+
+def get_stream_id_by_name(_stream_name, _stream_list):
+    for stream in _stream_list:
+        if stream['name'].lower() == _stream_name.lower():
+            return stream['stream_id']
+
+def get_stream_id_by_num(_stream_num, _stream_list):
+    for stream in _stream_list:
+        if str(stream['num']) == _stream_num:
+            return stream['stream_id']
+
+def play_stream(_url):
+    os.system(config["app"]["video_player"] + " -- " + _url)
+
+def main():
+    try:
+        live_streams = load_lists()
+    except FileNotFoundError:
+        live_streams = get_stream_list("live_streams")
+        save_lists(live_streams)
+
+    if args.list_channels:
+        print_stream_list(live_streams)
+
+    elif args.channel:
+        _stream_id = get_stream_id_by_num(args.channel, live_streams)
+        _url = get_stream_url(_stream_id)
+        play_stream(_url)
+
+    elif args.channel_name:
+        _stream_id = get_stream_id_by_name(args.channel_name, live_streams)
+        _url = get_stream_url(_stream_id)
+        play_stream(_url)
+
+argparser = argparse.ArgumentParser()
+argparser.add_argument('-l', '--list-channels', action="store_true", help="print channel list")
+argparser.add_argument('-c', '--channel', type=str, help="play channel by id")
+argparser.add_argument('-C', '--channel-name', type=str, help="play channel by name")
+args = argparser.parse_args()
+
+config = configparser.ConfigParser(allow_no_value=True)
+try:
+    load_config()
+except FileNotFoundError:
+    config.read_string(SAMPLE_CONFIG)
+    save_config()
+
+if not config["credentials"]["username"]:
+    config["credentials"]["username"] = input("Insert username: ")
+if not config["credentials"]["password"]:
+    config["credentials"]["password"] = input("Insert password: ")
+if not config["servers"]["central"]:
+    config["servers"]["central"] = get_central_server()
+if not config["servers"]["list"]:
+    config["servers"]["list"] = get_listings_server()
+if not config["servers"]["url"]:
+    config["servers"]["url"] = get_url_server()
+save_config()
+
+if __name__ == "__main__":
+    main()
